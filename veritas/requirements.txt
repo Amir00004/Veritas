@@ -17,6 +17,10 @@ structlog>=24.0
 celery[redis]>=5.4
 redis>=5.0
 
+# External research providers
+requests>=2.31
+scholarly>=1.7
+
 # pgvector (Phase 2+ embeddings, but enabling extension early)
 pgvector>=0.3
 

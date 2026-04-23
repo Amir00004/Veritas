@@ -1,6 +1,3 @@
-# Base stack — db, redis, web (Gunicorn from Dockerfile), Celery worker.
-# For local development with hot reload: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
-
 services:
   db:
     image: pgvector/pgvector:pg16
