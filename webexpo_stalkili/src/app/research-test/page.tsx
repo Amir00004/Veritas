@@ -7,10 +7,10 @@ const API_BASE = "http://localhost:8000";
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_ATTEMPTS = 40;
 const EXAMPLE_PROFESSORS = [
-  "Yann LeCun",
-  "Yoshua Bengio",
-  "Geoffrey Hinton",
-  "Andrew Ng",
+  { full_name: "Yann LeCun", university_name: "New York University" },
+  { full_name: "Yoshua Bengio", university_name: "University of Montreal" },
+  { full_name: "Geoffrey Hinton", university_name: "University of Toronto" },
+  { full_name: "Andrew Ng", university_name: "Stanford University" },
 ];
 
 type FitScore = {
@@ -22,19 +22,39 @@ type FitScore = {
 
 type ProfessorPayload = {
   id?: number;
+  author_id?: string | null;
   full_name?: string;
   university?: string;
   department?: string;
   research_areas?: string[];
   h_index?: number | null;
+  h_index_since_2021?: number | null;
+  i10_index?: number | null;
+  i10_index_since_2021?: number | null;
   total_citations?: number | null;
-  recent_papers?: Array<{ title?: string; year?: number; citations?: number }>;
-  profile_urls?: Record<string, string>;
+  citations_since_2021?: number | null;
+  recent_papers?: Array<{
+    title?: string;
+    link?: string;
+    authors?: string;
+    publication?: string;
+    year?: number | null;
+    citations?: number;
+    citation_count?: number;
+  }>;
+  profile_urls?: Record<string, string> | string;
+  profile_picture_url?: string;
   email?: string | null;
   profile_data?: Record<string, unknown>;
   fit_score?: number;
   last_scraped?: string;
+  last_enriched_at?: string;
   updated_at?: string;
+};
+
+type ProfessorWithScore = {
+  professor: ProfessorPayload;
+  fit_score: FitScore;
 };
 
 type ResearchSuccess = {
@@ -42,6 +62,9 @@ type ResearchSuccess = {
   source?: "cache";
   professor: ProfessorPayload;
   fit_score: FitScore;
+  /** Present when a background search returned multiple Google Scholar rows. */
+  professors?: ProfessorWithScore[];
+  professor_ids?: number[];
 };
 
 function sleep(ms: number) {
@@ -69,6 +92,7 @@ export default function ResearchTestPage() {
 
   // Research state
   const [professorName, setProfessorName] = useState("");
+  const [universityName, setUniversityName] = useState("");
   const [isResearchLoading, setIsResearchLoading] = useState(false);
   const [pollAttempts, setPollAttempts] = useState(0);
   const [result, setResult] = useState<ResearchSuccess | null>(null);
@@ -236,8 +260,8 @@ export default function ResearchTestPage() {
       setError("Please login first.");
       return;
     }
-    if (!professorName.trim()) {
-      setError("Please enter a professor name.");
+    if (!professorName.trim() || !universityName.trim()) {
+      setError("Please enter both full name and university.");
       return;
     }
 
@@ -247,7 +271,10 @@ export default function ResearchTestPage() {
     try {
       const response = await apiRequest("/api/research/professor/", {
         method: "POST",
-        body: JSON.stringify({ professor_name: professorName.trim() }),
+        body: JSON.stringify({
+          full_name: professorName.trim(),
+          university_name: universityName.trim(),
+        }),
       });
       const data = await response.json();
 
@@ -281,8 +308,11 @@ export default function ResearchTestPage() {
     }
   }
 
-  const fitScore = result?.fit_score?.total_score ?? 0;
-  const scoreColor = getScoreColor(fitScore);
+  const resultRows: ProfessorWithScore[] = useMemo(() => {
+    if (!result) return [];
+    if (result.professors?.length) return result.professors;
+    return [{ professor: result.professor, fit_score: result.fit_score }];
+  }, [result]);
 
   return (
     <main className="min-h-screen bg-black text-white">
@@ -424,7 +454,14 @@ export default function ResearchTestPage() {
                 type="text"
                 value={professorName}
                 onChange={(e) => setProfessorName(e.target.value)}
-                placeholder="Enter professor name"
+                placeholder="Enter professor full name"
+                className="w-full rounded-xl border border-white/15 bg-black/40 px-3 py-2 text-sm outline-none focus:border-orange-400"
+              />
+              <input
+                type="text"
+                value={universityName}
+                onChange={(e) => setUniversityName(e.target.value)}
+                placeholder="Enter university name"
                 className="w-full rounded-xl border border-white/15 bg-black/40 px-3 py-2 text-sm outline-none focus:border-orange-400"
               />
               <button
@@ -437,14 +474,17 @@ export default function ResearchTestPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {EXAMPLE_PROFESSORS.map((name) => (
+              {EXAMPLE_PROFESSORS.map((item) => (
                 <button
-                  key={name}
+                  key={`${item.full_name}-${item.university_name}`}
                   type="button"
-                  onClick={() => setProfessorName(name)}
+                  onClick={() => {
+                    setProfessorName(item.full_name);
+                    setUniversityName(item.university_name);
+                  }}
                   className="rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-xs text-gray-200 transition hover:border-orange-400 hover:text-white"
                 >
-                  {name}
+                  {item.full_name} · {item.university_name}
                 </button>
               ))}
             </div>
@@ -478,61 +518,166 @@ export default function ResearchTestPage() {
 
         {/* Result section */}
         {result && (
-          <section className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <h3 className="text-2xl font-semibold">
-                  {result.professor.full_name || "Unknown Professor"}
-                </h3>
-                <p className="mt-1 text-sm text-gray-300">
-                  {result.professor.university || "Unknown University"}
-                  {result.professor.department ? ` · ${result.professor.department}` : ""}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-black/40 p-4 text-center">
-                <p className="text-xs uppercase tracking-wider text-gray-400">Fit Score</p>
-                <p className={`mt-1 text-4xl font-bold ${scoreColor}`}>
-                  {fitScore}/{result.fit_score.max_score}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {Object.entries(result.fit_score.breakdown).map(([key, value]) => (
-                <div key={key} className="rounded-xl border border-white/10 bg-black/40 p-3">
-                  <p className="text-xs uppercase tracking-wide text-gray-400">
-                    {key.replaceAll("_", " ")}
-                  </p>
-                  <p className="mt-1 text-xl font-semibold text-white">{value}</p>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
-              <p className="text-sm font-medium text-gray-200">Explanation</p>
-              <p className="mt-1 text-sm text-gray-300">{result.fit_score.explanation}</p>
-            </div>
-
-            <div className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
-              <p className="text-sm font-medium text-gray-200">Recent Papers</p>
-              {result.professor.recent_papers?.length ? (
-                <ul className="mt-2 space-y-2 text-sm text-gray-300">
-                  {result.professor.recent_papers.map((paper, index) => (
-                    <li key={`${paper.title ?? "paper"}-${index}`} className="rounded-lg bg-white/5 p-2">
-                      <p className="font-medium text-white">{paper.title || "Untitled paper"}</p>
-                      <p className="text-xs text-gray-400">
-                        Year: {paper.year ?? "N/A"} · Citations: {paper.citations ?? "N/A"}
+          <section className="mt-6 space-y-6">
+            {resultRows.length > 1 && (
+              <p className="text-sm text-gray-400">
+                {resultRows.length} candidates returned from the search. Each row is stored as a
+                separate professor record.
+              </p>
+            )}
+            {resultRows.map((row) => {
+              const rowScore = row.fit_score.total_score;
+              const rowScoreColor = getScoreColor(rowScore);
+              return (
+                <div
+                  key={row.professor.id ?? `${row.professor.full_name}-${row.professor.university}`}
+                  className="rounded-2xl border border-white/10 bg-white/5 p-6"
+                >
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <h3 className="text-2xl font-semibold">
+                        {row.professor.full_name || "Unknown Professor"}
+                      </h3>
+                      <p className="mt-1 text-sm text-gray-300">
+                        {row.professor.university || "Unknown University"}
+                        {row.professor.department ? ` · ${row.professor.department}` : ""}
                       </p>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-2 text-sm text-gray-400">No recent papers available.</p>
-              )}
-            </div>
+                    </div>
 
-            <div className="mt-5">
+                    <div className="rounded-2xl border border-white/10 bg-black/40 p-4 text-center">
+                      <p className="text-xs uppercase tracking-wider text-gray-400">Fit Score</p>
+                      <p className={`mt-1 text-4xl font-bold ${rowScoreColor}`}>
+                        {rowScore}/{row.fit_score.max_score}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    {Object.entries(row.fit_score.breakdown).map(([key, value]) => (
+                      <div key={key} className="rounded-xl border border-white/10 bg-black/40 p-3">
+                        <p className="text-xs uppercase tracking-wide text-gray-400">
+                          {key.replaceAll("_", " ")}
+                        </p>
+                        <p className="mt-1 text-xl font-semibold text-white">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
+                    <p className="text-sm font-medium text-gray-200">Explanation</p>
+                    <p className="mt-1 text-sm text-gray-300">{row.fit_score.explanation}</p>
+                  </div>
+
+                  <div className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
+                    <p className="text-sm font-medium text-gray-200">All Stored Fields</p>
+                    <div className="mt-3 grid gap-2 text-sm text-gray-300 sm:grid-cols-2">
+                      <p>Professor ID: {row.professor.id ?? "N/A"}</p>
+                      <p>Author ID: {row.professor.author_id ?? "N/A"}</p>
+                      <p>Email: {row.professor.email || "N/A"}</p>
+                      <p>Last scraped: {row.professor.last_scraped || "N/A"}</p>
+                      <p>Last enriched: {row.professor.last_enriched_at || "N/A"}</p>
+                      <p>Updated at: {row.professor.updated_at || "N/A"}</p>
+                      <p>Total citations: {row.professor.total_citations ?? "N/A"}</p>
+                      <p>Citations since 2021: {row.professor.citations_since_2021 ?? "N/A"}</p>
+                      <p>h-index all time: {row.professor.h_index ?? "N/A"}</p>
+                      <p>h-index since 2021: {row.professor.h_index_since_2021 ?? "N/A"}</p>
+                      <p>i10-index all time: {row.professor.i10_index ?? "N/A"}</p>
+                      <p>i10-index since 2021: {row.professor.i10_index_since_2021 ?? "N/A"}</p>
+                    </div>
+                    <div className="mt-3">
+                      <p className="text-sm font-medium text-gray-200">Research areas</p>
+                      {row.professor.research_areas?.length ? (
+                        <p className="mt-1 text-sm text-gray-300">
+                          {row.professor.research_areas.join(", ")}
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-sm text-gray-400">N/A</p>
+                      )}
+                    </div>
+                    {row.professor.profile_picture_url ? (
+                      <div className="mt-3">
+                        <p className="text-sm font-medium text-gray-200">Profile picture</p>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={row.professor.profile_picture_url}
+                          alt={row.professor.full_name || "Professor"}
+                          className="mt-2 h-20 w-20 rounded-lg border border-white/10 object-cover"
+                        />
+                      </div>
+                    ) : null}
+                    <div className="mt-3">
+                      <p className="text-sm font-medium text-gray-200">Profile URLs</p>
+                      {typeof row.professor.profile_urls === "string" &&
+                      row.professor.profile_urls.trim() ? (
+                        <ul className="mt-1 space-y-1 text-sm text-sky-300">
+                          <li>
+                            <a
+                              href={row.professor.profile_urls}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline"
+                            >
+                              google_scholar: {row.professor.profile_urls}
+                            </a>
+                          </li>
+                        </ul>
+                      ) : row.professor.profile_urls &&
+                        typeof row.professor.profile_urls === "object" &&
+                        Object.keys(row.professor.profile_urls).length ? (
+                        <ul className="mt-1 space-y-1 text-sm text-sky-300">
+                          {Object.entries(row.professor.profile_urls).map(([key, url]) => (
+                            <li key={key}>
+                              <a href={url} target="_blank" rel="noreferrer" className="underline">
+                                {key}: {url}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-1 text-sm text-gray-400">N/A</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
+                    <p className="text-sm font-medium text-gray-200">Recent Papers</p>
+                    {row.professor.recent_papers?.length ? (
+                      <ul className="mt-2 space-y-2 text-sm text-gray-300">
+                        {row.professor.recent_papers.map((paper, index) => (
+                          <li
+                            key={`${paper.title ?? "paper"}-${index}`}
+                            className="rounded-lg bg-white/5 p-2"
+                          >
+                            <p className="font-medium text-white">{paper.title || "Untitled paper"}</p>
+                            <p className="text-xs text-gray-400">
+                              Year: {paper.year ?? "N/A"} · Citations:{" "}
+                              {paper.citation_count ?? paper.citations ?? "N/A"}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Authors: {paper.authors || "N/A"} · Publication: {paper.publication || "N/A"}
+                            </p>
+                            {paper.link ? (
+                              <a
+                                href={paper.link}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs text-sky-300 underline"
+                              >
+                                Open article
+                              </a>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm text-gray-400">No recent papers available.</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
               <button
                 type="button"
                 onClick={() => setShowRaw((prev) => !prev)}

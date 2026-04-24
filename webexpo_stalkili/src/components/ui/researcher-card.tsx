@@ -37,7 +37,7 @@ export const MOCK_RESEARCHERS: Researcher[] = [
     university: 'Stanford University',
     location: 'Stanford, CA',
     image: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?q=80&w=200&h=200&auto=format&fit=crop',
-    topics: ['AI Safety', 'Fairness in ML', 'Tech Policy'],
+    topics: ['AI Safety', 'Fairness in ML', 'Tech Policy', 'AI Ethics'],
     matchScore: 65,
     publications: 61,
     summary: 'Leading voice on responsible AI deployment. Advises EU and UN bodies on algorithmic accountability frameworks.',
