@@ -7,9 +7,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Professor
-from .serializers import ProfessorSerializer
-from .services import get_or_research_professor
+from .services import trigger_professor_enrichment
 
 
 class ProfessorResearchView(APIView):
@@ -18,38 +16,24 @@ class ProfessorResearchView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
     def post(self, request: Request) -> Response:
-        professor_name = str(request.data.get("professor_name", "")).strip()
-        if not professor_name:
+        full_name = str(request.data.get("full_name", "")).strip()
+        university_name = str(request.data.get("university_name", "")).strip()
+        if not full_name or not university_name:
             return Response(
                 {
                     "status": "error",
-                    "message": "Field 'professor_name' is required.",
+                    "message": "Fields 'full_name' and 'university_name' are required.",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        result = get_or_research_professor(request.user, professor_name)
-
-        if result["status"] == "from_cache":
-            professor = Professor.objects.filter(pk=result["professor_data"]["id"]).first()
-            professor_payload = (
-                ProfessorSerializer(professor).data if professor else result["professor_data"]
-            )
-            return Response(
-                {
-                    "status": "success",
-                    "source": "cache",
-                    "professor": professor_payload,
-                    "fit_score": result["score_data"],
-                },
-                status=status.HTTP_200_OK,
-            )
+        result = trigger_professor_enrichment(request.user, full_name, university_name)
 
         return Response(
             {
                 "status": "processing",
                 "task_id": result["task_id"],
-                "message": "Research started. Poll this task_id for completion.",
+                "message": "Enrichment started. Poll this task_id for completion.",
             },
             status=status.HTTP_202_ACCEPTED,
         )

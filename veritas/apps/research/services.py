@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from celery import chain
 from django.utils import timezone
 
 from .models import Professor
@@ -92,49 +93,42 @@ def _serialize_professor(professor: Professor) -> dict:
     """Return API-friendly dict for professor payload."""
     return {
         "id": professor.id,
+        "author_id": professor.author_id,
         "full_name": professor.full_name,
         "university": professor.university,
         "department": professor.department,
         "research_areas": professor.research_areas,
         "h_index": professor.h_index,
+        "h_index_since_2021": professor.h_index_since_2021,
+        "i10_index": professor.i10_index,
+        "i10_index_since_2021": professor.i10_index_since_2021,
         "total_citations": professor.total_citations,
+        "citations_since_2021": professor.citations_since_2021,
         "recent_papers": professor.recent_papers,
         "profile_urls": professor.profile_urls,
+        "profile_picture_url": professor.profile_picture_url,
         "email": professor.email,
         "last_scraped": professor.last_scraped.isoformat() if professor.last_scraped else None,
+        "last_enriched_at": (
+            professor.last_enriched_at.isoformat() if professor.last_enriched_at else None
+        ),
         "updated_at": professor.updated_at.isoformat() if professor.updated_at else None,
     }
 
 
-def get_or_research_professor(user, professor_name: str):
-    """
-    Return cached professor when fresh; otherwise queue background research.
+def trigger_professor_enrichment(user, full_name: str, university_name: str) -> dict:
+    """Queue the two-step SerpAPI enrichment chain and return task id immediately."""
+    normalized_full_name = full_name.strip()
+    normalized_university = university_name.strip()
+    from .tasks import enrich_author_profile_task, find_author_id_task
 
-    Returns dict: {professor_data, score_data, status, task_id}
-    """
-    normalized_name = professor_name.strip()
-
-    # Step 1: Try to find in DB (with some normalization)
-    professor = Professor.objects.filter(full_name__iexact=normalized_name).first()
-
-    if professor and not is_data_stale(professor.last_scraped):
-        # Fast path
-        score = calculate_fit_score(user, professor)
-        return {
-            "professor_data": _serialize_professor(professor),
-            "score_data": score,
-            "status": "from_cache",
-            "task_id": None,
-        }
-
-    # Step 2: Not found or stale -> trigger background research
-    from .tasks import research_and_save_professor
-
-    task = research_and_save_professor.delay(normalized_name, user.id)
-
+    task = chain(
+        find_author_id_task.s(normalized_full_name, normalized_university, user.id),
+        enrich_author_profile_task.s(),
+    ).apply_async()
     return {
         "professor_data": None,
         "score_data": None,
         "status": "processing",
         "task_id": task.id,
-    }  # Frontend will poll or use WebSocket later
+    }
