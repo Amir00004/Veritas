@@ -18,7 +18,12 @@ from .models import Professor, SerpApiRawResponse
 from .serializers import ProfessorSerializer
 from .services import calculate_fit_score
 
-logger = structlog.get_logger(__name__)
+from celery.utils.log import get_task_logger
+logger = get_task_logger(__name__)
+
+import logging
+logger = logging.getLogger("celery.task")
+
 User = get_user_model()
 SERPAPI_URL = "https://serpapi.com/search"
 MAX_RETRIES = 3
@@ -110,12 +115,9 @@ def _interests_titles(author_payload: dict[str, Any]) -> list[str]:
 
 
 def _extract_metric_row(rows: list[Any], metric_name: str) -> dict[str, int]:
-    print(f"[enrich_author_profile_task] cited_table={rows}", flush=True)
     for row in rows:
-        print(f"[enrich_author_profile_task] row={row}", flush=True)
         if not isinstance(row, dict):
             continue
-
         nested = row.get(metric_name)
         if isinstance(nested, dict):
             return {
@@ -138,8 +140,10 @@ def _extract_sorted_articles(author_payload: dict[str, Any]) -> list[dict[str, A
     for article in author_payload.get("articles", []) or []:
         if not isinstance(article, dict):
             continue
+        logger.info("[enrich_author_profile_task] article=%s", article)
         year_raw = article.get("year")
-        year = int(year_raw) if isinstance(year_raw, int) else 0
+        year = int(year_raw) if isinstance(year_raw, str) else 0
+        logger.info("[enrich_author_profile_task] year=%s", year)
         articles_out.append(
             {
                 "title": str(article.get("title", "")).strip(),
@@ -226,16 +230,11 @@ def enrich_author_profile_task(self, step1_payload: dict[str, Any]) -> dict[str,
         cited_by = payload.get("cited_by", {}) if isinstance(payload.get("cited_by"), dict) else {}
         cited_table = cited_by.get("table", []) if isinstance(cited_by.get("table"), list) else []
         citations = _extract_metric_row(cited_table, "citations")
-        h_index = _extract_metric_row(cited_table, "h-index")
-        i10_index = _extract_metric_row(cited_table, "i10-index")
+        h_index = _extract_metric_row(cited_table, "h_index")
+        i10_index = _extract_metric_row(cited_table, "i10_index")
         articles = _extract_sorted_articles(payload)
-
-        profile_urls = {}
-        for key in ("link", "serpapi_link"):
-            val = author.get(key)
-            if isinstance(val, str) and val.strip():
-                profile_urls["google_scholar" if key == "link" else "serpapi"] = val.strip()
-
+        profile_urls = payload.get("search_metadata", {}).get("google_scholar_author_url") or author.get("link")
+        logger.info("[enrich_author_profile_task] profile_urls=%s", profile_urls)
         professor, _created = Professor.objects.update_or_create(
             author_id=author_id,
             defaults={
